@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>3D Maze Chaser — Adventure Build</title>
+<style>
+  :root{color-scheme:dark}
+  *{box-sizing:border-box}
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#080d14;font-family:system-ui,Arial,sans-serif;touch-action:none}
+  canvas{display:block}
+  #hud{position:fixed;top:10px;left:10px;right:10px;z-index:2;display:flex;gap:8px;align-items:flex-start;pointer-events:none;flex-wrap:wrap}
+  .panel{background:#07111dd9;border:1px solid #5d7895a8;border-radius:12px;padding:9px 11px;box-shadow:0 4px 18px #0007;backdrop-filter:blur(5px);color:#f4f7fb;font-size:12px}
+  #xpPanel{min-width:190px;flex:1;max-width:300px}
+  .bar{height:10px;background:#263647;border-radius:99px;overflow:hidden;margin-top:6px;border:1px solid #51677c}
+  #xpFill{height:100%;width:0%;background:linear-gradient(90deg,#43e7b0,#c2ff70);transition:width .3s}
+  #healthFill{height:100%;width:100%;background:#ff546b;transition:width .2s}
+  #message{position:fixed;top:110px;left:50%;transform:translateX(-50%);z-index:3;background:#07111de8;border:1px solid #7da1c7;border-radius:12px;padding:10px 15px;text-align:center;color:#fff;max-width:90%;font-size:14px;display:none}
+  #help{position:fixed;left:10px;bottom:10px;z-index:2;max-width:280px;pointer-events:none;line-height:1.5}
+  #touch{position:fixed;inset:auto 0 15px 0;z-index:4;display:none;align-items:end;justify-content:space-between;padding:0 16px;pointer-events:none}
+  .pad{display:grid;grid-template-columns:48px 48px 48px;grid-template-rows:48px 48px;gap:5px;pointer-events:auto}
+  button{border:1px solid #b4d5f0a8;background:#10243bd9;color:white;border-radius:13px;font-weight:800;font-size:14px;min-width:48px;min-height:48px;touch-action:none;box-shadow:0 3px 10px #0005}
+  button:active{background:#28618a}
+  .empty{visibility:hidden}
+  #actions{display:flex;gap:8px;pointer-events:auto;align-items:end}
+  #actions button{width:68px;height:58px;font-size:11px}
+  #restart{position:fixed;inset:0;z-index:10;background:#050a10eF;display:none;align-items:center;justify-content:center;text-align:center;padding:24px}
+  #restart .box{max-width:360px;background:#0d1b2b;border:1px solid #6989a9;border-radius:18px;padding:24px}
+  #restart h1{margin-top:0}
+  @media (pointer:coarse){#touch{display:flex}#help{bottom:145px;font-size:10px;max-width:200px}}
+</style>
+</head>
+<body>
+<div id="hud">
+  <div class="panel"><b id="mapLabel">MAP 1</b><div id="levelLabel">LEVEL 1</div></div>
+  <div class="panel" id="xpPanel"><div style="display:flex;justify-content:space-between;gap:12px"><b>EXPERIENCE</b><span id="xpText">0 / 100 XP</span></div><div class="bar"><div id="xpFill"></div></div></div>
+  <div class="panel" style="min-width:125px"><div><b>HEALTH</b> <span id="healthText">100/100</span></div><div class="bar"><div id="healthFill"></div></div><div id="weaponLabel" style="margin-top:6px">Weapon: Hands</div></div>
+</div>
+<div id="message"></div>
+<div id="help" class="panel">WASD / arrows: move · Space: jump · E: pick up weapon · F: attack<br>Collect 🍎 to save a checkpoint. Reach the glowing exit to finish a map.</div>
+<div id="touch">
+  <div class="pad">
+    <button class="empty"> </button><button data-key="ArrowUp">▲</button><button class="empty"> </button>
+    <button data-key="ArrowLeft">◀</button><button data-key="ArrowDown">▼</button><button data-key="ArrowRight">▶</button>
+  </div>
+  <div id="actions"><button data-action="jump">JUMP</button><button data-action="pickup">PICK UP</button><button data-action="attack">ATTACK</button></div>
+</div>
+<div id="restart"><div class="box"><h1 id="endTitle">You were caught!</h1><p id="endText">Respawning at your fruit checkpoint…</p><button id="continueBtn">CONTINUE</button></div></div>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x09131e);
+scene.fog = new THREE.Fog(0x09131e, 18, 48);
+const camera = new THREE.PerspectiveCamera(68, innerWidth/innerHeight, .1, 100);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight); renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+renderer.outputColorSpace=THREE.SRGBColorSpace; document.body.appendChild(renderer.domElement);
+scene.add(new THREE.HemisphereLight(0x9fcfff,0x28321d,2.1));
+const sun = new THREE.DirectionalLight(0xffffff,2.4); sun.position.set(-8,16,10); sun.castShadow=true; sun.shadow.mapSize.set(1024,1024); scene.add(sun);
+
+const ui = id=>document.getElementById(id);
+const mat=(color,roughness=.8,metalness=0)=>new THREE.MeshStandardMaterial({color,roughness,metalness});
+const mats={floor:mat(0x263a3d),wall:mat(0x536875),top:mat(0x748c94),player:mat(0x2ee0c2),dark:mat(0x132633),enemy:mat(0xe34252),enemyDark:mat(0x671e2c),fruit:mat(0xff394f,.3),leaf:mat(0x63e77b),gold:mat(0xffc94a,.3,.3),steel:mat(0xaec5d8,.25,.65),blue:mat(0x58a9ff,.3,.2),exit:mat(0x7a63ff,.3,.2)};
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(100,100),mats.floor); floor.rotation.x=-Math.PI/2; floor.position.y=-.12; floor.receiveShadow=true; scene.add(floor);
+let walls=[], enemies=[], weapons=[], fruits=[], exitMesh, player, weaponMesh, level=1,xp=0,xpNeed=100,mapNo=1,health=100,maxHealth=100,weapon='Hands',attackCooldown=0,invulnerable=0,checkpoint={x:-7,z:-7,map:1},lastFruitMap=0, mapWalls=[];
+const keys={};
+let verticalVelocity=0,onGround=true,gameOver=false,gameWon=false,toastTimer=0;
+const playerRadius=.32;
+function box(x,y,z,sx,sy,sz,material,group=scene){const o=new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz),material);o.position.set(x,y,z);o.castShadow=true;o.receiveShadow=true;group.add(o);return o}
+function sphere(x,y,z,r,material,group=scene){const o=new THREE.Mesh(new THREE.SphereGeometry(r,16,12),material);o.position.set(x,y,z);o.castShadow=true;group.add(o);return o}
+function cylinder(x,y,z,r1,r2,h,material,group=scene){const o=new THREE.Mesh(new THREE.CylinderGeometry(r1,r2,h,12),material);o.position.set(x,y,z);o.castShadow=true;group.add(o);return o}
+function showMessage(msg,ms=2300){ui('message').textContent=msg;ui('message').style.display='block';toastTimer=ms}
+function addWall(x,z,sx,sz){const h=2.7;const w=box(x,h/2,z,sx,h,sz,mats.wall); walls.push({x,z,sx,sz,mesh:w});mapWalls.push(w)}
+function clearMap(){for(const w of mapWalls)scene.remove(w);mapWalls=[];walls=[];for(const e of enemies)scene.remove(e.group);enemies=[];for(const w of weapons)scene.remove(w.group);weapons=[];for(const f of fruits)scene.remove(f.group);fruits=[];if(exitMesh)scene.remove(exitMesh)}
+function makePlayer(){player=new THREE.Group();const body=box(0,.68,0,.55,.8,.42,mats.player,player);body.position.y=.68;const head=sphere(0,1.25,0,.23,mat(0xe3fff8),player);head.position.y=1.25;const eyeMat=mat(0x10202b);sphere(-.08,1.28,.2,.035,eyeMat,player);sphere(.08,1.28,.2,.035,eyeMat,player);player.position.set(-7,0,-7);scene.add(player)}
+function makeFruit(x,z){const g=new THREE.Group();sphere(0,.38,0,.24,mats.fruit,g);sphere(.13,.56,0,.08,mats.leaf,g);const stem=cylinder(0,.61,0,.025,.025,.12,mat(0x5e3d20),g);stem.rotation.z=-.2;g.position.set(x,0,z);scene.add(g);fruits.push({group:g,x,z,collected:false})}
+function makeWeapon(x,z,type){const g=new THREE.Group();if(type==='Sword'){box(0,.72,0,.12,.72,.12,mats.steel,g);box(0,.35,0,.38,.09,.12,mats.gold,g);box(0,.22,0,.1,.22,.1,mat(0x79512e),g)}else if(type==='Axe'){box(0,.55,0,.09,.7,.09,mat(0x79512e),g);box(.12,.82,0,.36,.25,.12,mats.steel,g)}else{box(0,.62,0,.14,.6,.14,mats.blue,g);box(0,.94,0,.25,.12,.16,mats.gold,g)}g.position.set(x,0,z);scene.add(g);weapons.push({group:g,x,z,type,picked:false});}
+function makeEnemy(x,z,axis='x',range=2){const g=new THREE.Group();box(0,.55,0,.52,.65,.45,mats.enemy,g);sphere(0,1,0,.23,mats.enemyDark,g);sphere(-.08,1.03,.2,.04,mat(0xffffff),g);sphere(.08,1.03,.2,.04,mat(0xffffff),g);g.position.set(x,0,z);scene.add(g);enemies.push({group:g,x,z,originX:x,originZ:z,axis,range,dir:1,hp:2,alert:false,attack:0,dead:false});}
+function makeExit(x,z){exitMesh=new THREE.Group();cylinder(0,.08,0,.72,.72,.12,mats.exit,exitMesh);for(let i=0;i<3;i++){const ring=new THREE.Mesh(new THREE.TorusGeometry(.45+i*.12,.045,8,24),mats.gold);ring.rotation.x=Math.PI/2;ring.position.y=.4+i*.22;exitMesh.add(ring)}exitMesh.position.set(x,0,z);scene.add(exitMesh)}
+function buildMap(n){
+ clearMap(); mapNo=n;ui('mapLabel').textContent='MAP '+mapNo;
+ // Outer bounds and a connected zig-zag maze. Open lanes are deliberately wide for mobile controls.
+ addWall(0,-10,20,.5);addWall(0,10,20,.5);addWall(-10,0,.5,20);addWall(10,0,.5,20);
+ const layouts=[
+  [[-5,-6,1,6],[0,-3,1,8],[4,2,1,7],[-4,4,5,1],[5,-6,4,1]],
+  [[-6,-2,1,9],[-1,-6,7,1],[2,1,1,8],[5,5,6,1],[-4,6,4,1]],
+  [[-4,-5,1,7],[1,-3,1,9],[5,1,1,7],[-5,3,5,1],[3,-6,5,1]]
+ ];
+ const layout=layouts[(n-1)%layouts.length];
+ layout.forEach(([x,z,sx,sz])=>addWall(x,z,sx,sz));
+ player.position.set(-7,0,-7);verticalVelocity=0;onGround=true;
+ makeFruit(-7, -4.8);
+ const types=['Sword','Axe','Blaster'];
+ makeWeapon(-5.8,-7,types[(n-1)%3]);makeWeapon(4,-7,types[n%3]);
+ makeEnemy(-2,-7,'x',1.6);makeEnemy(6,-2,'z',1.7);makeEnemy(-6,7,'x',1.2);
+ makeExit(7,7);
+ checkpoint={x:-7,z:-7,map:n};lastFruitMap=0;
+ showMessage('MAP '+n+' — Find the 🍎 checkpoint, collect a weapon, and reach the purple exit!');
+}
+function updateHUD(){ui('levelLabel').textContent='LEVEL '+level;ui('xpText').textContent=`${xp} / ${xpNeed} XP`;ui('xpFill').style.width=(xp/xpNeed*100)+'%';ui('healthText').textContent=`${Math.max(0,Math.ceil(health))}/${maxHealth}`;ui('healthFill').style.width=(health/maxHealth*100)+'%';ui('weaponLabel').textContent='Weapon: '+weapon}
+function gainXP(amount){xp+=amount;while(xp>=xpNeed){xp-=xpNeed;level++;xpNeed=Math.floor(xpNeed*1.25);maxHealth+=10;health=Math.min(maxHealth,health+20);showMessage('LEVEL UP! You are now level '+level+'! +10 max health',2600)}updateHUD()}
+function collides(x,z,r=.32){for(const w of walls){if(x+r>w.x-w.sx/2&&x-r<w.x+w.sx/2&&z+r>w.z-w.sz/2&&z-r<w.z+w.sz/2)return true}return false}
+function movePlayer(dx,dz){const nx=player.position.x+dx,nz=player.position.z+dz;if(!collides(nx,player.position.z))player.position.x=nx;if(!collides(player.position.x,nz))player.position.z=nz}
+function jump(){if(onGround&&!gameOver){verticalVelocity=6.6;onGround=false}}
+function doPickup(){let nearest=null,dist=1.45;for(const w of weapons){if(w.picked)continue;const d=Math.hypot(player.position.x-w.x,player.position.z-w.z);if(d<dist){nearest=w;dist=d}}if(nearest){nearest.picked=true;weapon=nearest.type;scene.remove(nearest.group);if(weaponMesh)player.remove(weaponMesh);weaponMesh=new THREE.Group();if(weapon==='Sword'){box(.38,.65,.1,.09,.68,.09,mats.steel,weaponMesh);box(.38,.34,.1,.3,.08,.1,mats.gold,weaponMesh)}else if(weapon==='Axe'){box(.38,.55,.1,.08,.65,.08,mat(0x79512e),weaponMesh);box(.49,.83,.1,.28,.22,.1,mats.steel,weaponMesh)}else{box(.38,.6,.1,.14,.55,.14,mats.blue,weaponMesh)}player.add(weaponMesh);showMessage('Picked up '+weapon+'! Press F / ATTACK to use it.');updateHUD()}else showMessage('Move closer to a weapon to pick it up.')}
+function attack(){if(attackCooldown>0||gameOver)return;attackCooldown=weapon==='Axe'?.85:.48;let hit=false;for(const e of enemies){if(e.dead)continue;const d=Math.hypot(player.position.x-e.group.position.x,player.position.z-e.group.position.z);if(d<(weapon==='Blaster'?5:1.7)){e.hp-=weapon==='Axe'?2:1;hit=true;if(e.hp<=0){e.dead=true;scene.remove(e.group);gainXP(35);showMessage('Enemy defeated! +35 XP');}else showMessage('Hit enemy! '+e.hp+' health left');if(weapon!=='Blaster')break;}}if(!hit)showMessage(weapon==='Blaster'?'No enemy in range.':'Swing missed! Get closer to an enemy.');}
+function collectThings(){for(const f of fruits){if(f.collected)continue;if(Math.hypot(player.position.x-f.x,player.position.z-f.z)<.8){f.collected=true;scene.remove(f.group);checkpoint={x:f.x,z:f.z,map:mapNo};lastFruitMap=mapNo;health=Math.min(maxHealth,health+25);updateHUD();showMessage('🍎 Checkpoint saved! +25 health. Your level and XP survive death.',3000)}}
+ for(const e of enemies){if(e.dead)continue;const d=Math.hypot(player.position.x-e.group.position.x,player.position.z-e.group.position.z);if(d<.7&&invulnerable<=0){health-=12;invulnerable=1.05;showMessage('The red enemy hit you!');updateHUD();if(health<=0)die()}}
+ if(exitMesh&&Math.hypot(player.position.x-exitMesh.position.x,player.position.z-exitMesh.position.z)<1){gainXP(60);buildMap(mapNo+1)}
+}
+function die(){gameOver=true;ui('endTitle').textContent='You were caught!';ui('endText').textContent='Your level and XP are safe. Respawn at your saved fruit checkpoint.';ui('restart').style.display='flex'}
+ui('continueBtn').addEventListener('click',()=>{health=maxHealth;player.position.set(checkpoint.x,0,checkpoint.z);verticalVelocity=0;onGround=true;invulnerable=2;gameOver=false;ui('restart').style.display='none';updateHUD();showMessage('Respawned at checkpoint. Keep going!')});
+function action(a){if(a==='jump')jump();if(a==='pickup')doPickup();if(a==='attack')attack()}
+addEventListener('keydown',e=>{keys[e.code]=true;if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code))e.preventDefault();if(e.code==='Space')jump();if(e.code==='KeyE')doPickup();if(e.code==='KeyF')attack()});
+addEventListener('keyup',e=>keys[e.code]=false);
+document.querySelectorAll('[data-key]').forEach(b=>{const k=b.dataset.key;b.addEventListener('pointerdown',e=>{e.preventDefault();keys[k]=true;b.setPointerCapture(e.pointerId)});['pointerup','pointercancel','lostpointercapture'].forEach(ev=>b.addEventListener(ev,()=>keys[k]=false))});
+document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('pointerdown',e=>{e.preventDefault();action(b.dataset.action)}));
+addEventListener('blur',()=>Object.keys(keys).forEach(k=>keys[k]=false));
+const clock=new THREE.Clock();
+function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.04);if(!gameOver){
+ attackCooldown=Math.max(0,attackCooldown-dt);invulnerable=Math.max(0,invulnerable-dt);
+ let forward=0,side=0;if(keys.KeyW||keys.ArrowUp)forward+=1;if(keys.KeyS||keys.ArrowDown)forward-=1;if(keys.KeyA||keys.ArrowLeft)side-=1;if(keys.KeyD||keys.ArrowRight)side+=1;
+ const len=Math.hypot(forward,side)||1;forward/=len;side/=len;const speed=4.2*dt;movePlayer(side*speed, -forward*speed);
+ if(forward||side)player.rotation.y=Math.atan2(side,forward);
+ if(!onGround){verticalVelocity-=15*dt;player.position.y+=verticalVelocity*dt;if(player.position.y<=0){player.position.y=0;verticalVelocity=0;onGround=true}}
+ for(const e of enemies){if(e.dead)continue;const d=Math.hypot(player.position.x-e.group.position.x,player.position.z-e.group.position.z);e.alert=d<2.1;e.attack=Math.max(0,e.attack-dt);
+   if(!e.alert){e.group.position[e.axis==='x'?'x':'z']+=e.dir*dt*1.05;const val=e.group.position[e.axis==='x'?'x':'z'];const origin=e.axis==='x'?e.originX:e.originZ;if(Math.abs(val-origin)>e.range)e.dir*=-1}
+   else if(d>.68){const dx=(player.position.x-e.group.position.x)/(d||1),dz=(player.position.z-e.group.position.z)/(d||1);const nx=e.group.position.x+dx*dt*.65,nz=e.group.position.z+dz*dt*.65;if(!collides(nx,e.group.position.z,.28))e.group.position.x=nx;if(!collides(e.group.position.x,nz,.28))e.group.position.z=nz}
+   e.group.rotation.y=Math.atan2(player.position.x-e.group.position.x,player.position.z-e.group.position.z);
+ }
+ collectThings();
+ if(toastTimer>0){toastTimer-=dt*1000;if(toastTimer<=0)ui('message').style.display='none'}
+ }
+ const target=new THREE.Vector3(player.position.x,player.position.y+1.1,player.position.z);
+ const camOffset=new THREE.Vector3(0,5.5,8.5);const desired=target.clone().add(camOffset);camera.position.lerp(desired,.09);camera.lookAt(target);
+ // Slightly bob the fruit and rotate the exit beacon.
+ fruits.forEach(f=>{if(!f.collected){f.group.rotation.y+=dt*1.4;f.group.position.y=.05+Math.sin(performance.now()*.003+f.x)*.08}});
+ if(exitMesh)exitMesh.rotation.y+=dt*.7;
+ renderer.render(scene,camera);
+}
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+makePlayer();buildMap(1);updateHUD();animate();
+</script>
+</body>
+</html>
